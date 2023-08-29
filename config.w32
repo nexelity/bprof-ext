@@ -1,0 +1,6 @@
+ARG_ENABLE("bprof", "bprof support", "no");
+
+if (PHP_BPROF == "yes") {
+	EXTENSION("bprof", "bprof.c", null, "/DZEND_ENABLE_STATIC_TSRMLS_CACHE=1");
+    AC_DEFINE("HAVE_PCRE", 1, "have pcre headers");
+}
