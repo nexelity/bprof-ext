@@ -1241,8 +1241,8 @@ void bp_init_trace_callbacks()
     register_trace_callback("mysqli_query", callback);
     register_trace_callback("mysqli::query", callback);
 
-    callback = bp_trace_callback_predis;
-    register_trace_callback("Predis\\Client::executeCommand", callback);
+    // callback = bp_trace_callback_predis;
+    // register_trace_callback("Predis\\Client::executeCommand", callback);
     // \Predis\Client::executeCommand(\Predis\Command\CommandInterface $a);
 
     callback = bp_trace_callback_pdo_statement_execute;
