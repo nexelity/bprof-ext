@@ -42,6 +42,9 @@ typedef unsigned char uint8;
 #define INDEX_2_BYTE(index)  (index >> 3)
 #define INDEX_2_BIT(index)   (1 << (index & 0x7));
 
+#define bpmax(a,b) ((a) > (b) ? (a) : (b))
+#define bpmin(a,b) ((a) < (b) ? (a) : (b))
+
 #define register_trace_callback(function_name, cb) zend_hash_str_update_mem(BPROF_G(trace_callbacks), function_name, sizeof(function_name) - 1, &cb, sizeof(bp_trace_callback));
 
 /* bprof maintains a stack of entries being profiled. The memory for the entry

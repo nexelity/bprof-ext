@@ -405,6 +405,8 @@ size_t bp_get_entry_name(bp_entry_t *entry, char *result_buf, size_t result_len)
 {
     size_t len;
 
+    result_len = bpmin(SCRATCH_BUF_LEN, result_len);
+
     if (entry->rlvl_bprof) {
         len = snprintf(result_buf, result_len, "%s@%d", ZSTR_VAL(entry->name_bprof), entry->rlvl_bprof);
     } else {
@@ -1241,8 +1243,8 @@ void bp_init_trace_callbacks()
     register_trace_callback("mysqli_query", callback);
     register_trace_callback("mysqli::query", callback);
 
-    // callback = bp_trace_callback_predis;
-    // register_trace_callback("Predis\\Client::executeCommand", callback);
+     callback = bp_trace_callback_predis;
+     register_trace_callback("Predis\\Client::executeCommand", callback);
     // \Predis\Client::executeCommand(\Predis\Command\CommandInterface $a);
 
     callback = bp_trace_callback_pdo_statement_execute;
