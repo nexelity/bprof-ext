@@ -403,19 +403,29 @@ void bp_clean_profiler_state()
  */
 size_t bp_get_entry_name(bp_entry_t *entry, char *result_buf, size_t result_len)
 {
-    size_t len;
-
-    result_len = bpmin(SCRATCH_BUF_LEN, result_len);
-
-    if (entry->rlvl_bprof) {
-        len = snprintf(result_buf, result_len, "%s@%d", ZSTR_VAL(entry->name_bprof), entry->rlvl_bprof);
-    } else {
-        len = snprintf(result_buf, result_len, "%s", ZSTR_VAL(entry->name_bprof));
+    if (result_len == 0) {
+        return 0; // No space to write
     }
 
-    return len;
-}
+    char formatted_name[SCRATCH_BUF_LEN];
+    size_t len;
+    if (entry->rlvl_bprof) {
+        len = snprintf(formatted_name, sizeof(formatted_name), "%s@%d", ZSTR_VAL(entry->name_bprof), entry->rlvl_bprof);
+    } else {
+        len = snprintf(formatted_name, sizeof(formatted_name), "%s", ZSTR_VAL(entry->name_bprof));
+    }
 
+    // Ensure only ASCII characters are copied, and the buffer limit is respected
+    size_t copy_len = 0;
+    for (size_t i = 0; i < len && copy_len < result_len - 1; ++i) {
+        if (isascii(formatted_name[i])) {
+            result_buf[copy_len++] = formatted_name[i];
+        }
+    }
+
+    result_buf[copy_len] = '\0'; // Null-terminate
+    return copy_len;
+}
 
 /**
  * Build a caller qualified name for a callee.
@@ -432,37 +442,45 @@ size_t bp_get_entry_name(bp_entry_t *entry, char *result_buf, size_t result_len)
  */
 size_t bp_get_function_stack(bp_entry_t *entry, int level, char *result_buf, size_t result_len)
 {
-    size_t len = 0;
+    if (result_len == 0 || !entry) {
+        return 0; // No space in buffer or no entry to process
+    }
 
-    /* End recursion if we dont need deeper levels or we dont have any deeper
-    * levels */
-    if (!entry->prev_bprof || (level <= 1)) {
+    if (!entry->prev_bprof || level <= 1) {
+        // If this is the last level, or there are no previous entries, get the entry name
         return bp_get_entry_name(entry, result_buf, result_len);
     }
 
-    /* Take care of all ancestors first */
-    len = bp_get_function_stack(entry->prev_bprof, level - 1, result_buf, result_len);
-
-    /* Append the delimiter */
-# define STACK_DELIMITER ">>>"
-# define STACK_DELIMITER_LENGTH (sizeof(STACK_DELIMITER) - 1)
-
-    if (result_len < (len + STACK_DELIMITER_LENGTH)) {
-        /* Insufficient result_buf. Bail out! */
+    // Process the ancestor first
+    size_t len = bp_get_function_stack(entry->prev_bprof, level - 1, result_buf, result_len);
+    if (len >= result_len - 1) {
+        result_buf[result_len - 1] = '\0'; // Ensure null termination if buffer is full
         return len;
     }
 
-    /* Add delimiter only if entry had ancestors */
-    if (len) {
-        strncat(result_buf + len, STACK_DELIMITER, result_len - len);
-        len += STACK_DELIMITER_LENGTH;
+    size_t remaining = result_len - len - 1; // Adjust remaining length to reserve space for null terminator
+
+    // Append delimiter if space is available
+    const char *stack_delimiter = ">>>";
+    size_t delimiter_len = sizeof(">>>") - 1;
+
+    if (remaining > delimiter_len) {
+        strncat(result_buf + len, stack_delimiter, delimiter_len);
+        len += delimiter_len;
+        remaining -= delimiter_len;
+    } else {
+        result_buf[len] = '\0'; // Ensure null termination
+        return len;
     }
 
-# undef STACK_DELIMITER_LENGTH
-# undef STACK_DELIMITER
+    // Append current function name, considering the reduced remaining space
+    if (remaining > 0) {
+        size_t added_len = bp_get_entry_name(entry, result_buf + len, remaining);
+        len += (added_len > remaining ? remaining : added_len);
+    }
 
-    /* Append the current function name */
-    return len + bp_get_entry_name(entry, result_buf + len, result_len - len);
+    result_buf[len >= result_len - 1 ? result_len - 1 : len] = '\0'; // Ensure null termination
+    return len >= result_len - 1 ? result_len - 1 : len;
 }
 
 /**
