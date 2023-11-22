@@ -1,0 +1,8 @@
+FROM php:8.1-cli
+COPY --from=composer:latest /usr/bin/composer /usr/local/bin/composer
+RUN apt update && apt install build-essential
+
+WORKDIR /build/
+COPY . /build/
+RUN phpize && ./configure && make && make install && echo "extension=bprof" > /usr/local/etc/php/conf.d/bprof.ini
+RUN cd tests/ && composer install && php vendor/bin/phpunit src/TestSuite.php --process-isolation
