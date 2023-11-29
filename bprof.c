@@ -117,7 +117,6 @@ PHP_FUNCTION(bprof_disable)
         bp_stop();
         RETURN_ZVAL(&BPROF_G(stats_count), 1, 0);
     }
-    /* else null is returned */
 }
 
 static void php_bprof_init_globals(zend_bprof_globals *bprof_globals)
@@ -149,21 +148,7 @@ PHP_MINIT_FUNCTION(bprof)
 
     bp_register_constants(INIT_FUNC_ARGS_PASSTHRU);
 
-    /* Replace zend_compile with our proxy */
-    _zend_compile_file = zend_compile_file;
-    zend_compile_file  = bp_compile_file;
-
-    /* Replace zend_compile_string with our proxy */
-    _zend_compile_string = zend_compile_string;
-    zend_compile_string = bp_compile_string;
-
-#if PHP_VERSION_ID >= 80000
     zend_observer_fcall_register(tracer_observer);
-#else
-    /* Replace zend_execute with our proxy */
-    _zend_execute_ex = zend_execute_ex;
-    zend_execute_ex  = bp_execute_ex;
-#endif
 
     /* Replace zend_execute_internal with our proxy */
     _zend_execute_internal = zend_execute_internal;
@@ -187,14 +172,7 @@ PHP_MSHUTDOWN_FUNCTION(bprof)
 {
     /* free any remaining items in the free list */
     bp_free_the_free_list();
-
-#if PHP_VERSION_ID < 80000
-    /* Remove proxies, restore the originals */
-    zend_execute_ex       = _zend_execute_ex;
-#endif
     zend_execute_internal = _zend_execute_internal;
-    zend_compile_file     = _zend_compile_file;
-    zend_compile_string   = _zend_compile_string;
 
     return SUCCESS;
 }
@@ -238,8 +216,6 @@ PHP_MINFO_FUNCTION(bprof)
 static void bp_register_constants(INIT_FUNC_ARGS)
 {
     REGISTER_LONG_CONSTANT("BPROF_FLAGS_NO_BUILTINS", BPROF_FLAGS_NO_BUILTINS, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("BPROF_FLAGS_CPU", BPROF_FLAGS_CPU, CONST_CS | CONST_PERSISTENT);
-    REGISTER_LONG_CONSTANT("BPROF_FLAGS_MEMORY", BPROF_FLAGS_MEMORY, CONST_CS | CONST_PERSISTENT);
 }
 
 double get_timebase_conversion()
@@ -305,90 +281,53 @@ void bp_clean_profiler_state()
     }
 }
 
-/**
- * Returns formatted function name
- * @param entry bp_entry
- */
-size_t bp_get_entry_name(bp_entry_t *entry, char *result_buf, size_t result_len)
-{
-    if (result_len == 0) {
-        return 0; // No space to write
+size_t bp_get_entry_name(bp_entry_t *entry, char *result_buf, size_t result_len) {
+    if (result_len == 0 || !entry) {
+        return 0;
     }
 
-    char formatted_name[SCRATCH_BUF_LEN];
-    size_t len;
-    if (entry->rlvl_bprof) {
-        len = snprintf(formatted_name, sizeof(formatted_name), "%s@%d", ZSTR_VAL(entry->name_bprof), entry->rlvl_bprof);
-    } else {
-        len = snprintf(formatted_name, sizeof(formatted_name), "%s", ZSTR_VAL(entry->name_bprof));
+    int len = entry->rlvl_bprof
+              ? snprintf(result_buf, result_len, "%s@%d", entry->name_bprof->val, entry->rlvl_bprof)
+              : snprintf(result_buf, result_len, "%s", entry->name_bprof->val);
+
+    if (len < 0 || (size_t)len >= result_len) {
+        result_buf[result_len - 1] = '\0'; // Ensure null termination
+        return result_len - 1;
     }
 
-    // Ensure only ASCII characters are copied, and the buffer limit is respected
-    size_t copy_len = 0;
-    for (size_t i = 0; i < len && copy_len < result_len - 1; ++i) {
-        if (isascii(formatted_name[i])) {
-            result_buf[copy_len++] = formatted_name[i];
+    return (size_t)len;
+}
+
+size_t bp_get_function_stack(bp_entry_t *entry, int level, char *result_buf, size_t result_len) {
+    if (result_len == 0 || !entry) {
+        return 0;
+    }
+
+    size_t len = 0;
+
+    if (entry->prev_bprof && level > 1) {
+        len = bp_get_function_stack(entry->prev_bprof, level - 1, result_buf, result_len);
+        if (len >= result_len - 1) {
+            return len; // Buffer is full
+        }
+
+        const char *stack_delimiter = ">>>";
+        size_t delimiter_len = strlen(stack_delimiter);
+
+        if (result_len - len > delimiter_len) {
+            memcpy(result_buf + len, stack_delimiter, delimiter_len);
+            len += delimiter_len;
+        } else {
+            return len; // No space for delimiter
         }
     }
 
-    result_buf[copy_len] = '\0'; // Null-terminate
-    return copy_len;
-}
-
-/**
- * Build a caller qualified name for a callee.
- *
- * For example, if A() is caller for B(), then it returns "A>>>B".
- * Recursive invokations are denoted with @<n> where n is the recursion
- * depth.
- *
- * For example, "foo>>>foo@1", and "foo@2>>>foo@3" are examples of direct
- * recursion. And  "bar>>>foo@1" is an example of an indirect recursive
- * call to foo (implying the foo() is on the call stack some levels
- * above).
- *
- */
-size_t bp_get_function_stack(bp_entry_t *entry, int level, char *result_buf, size_t result_len)
-{
-    if (result_len == 0 || !entry) {
-        return 0; // No space in buffer or no entry to process
+    if (result_len - len > 0) {
+        size_t added_len = bp_get_entry_name(entry, result_buf + len, result_len - len);
+        len += added_len;
     }
 
-    if (!entry->prev_bprof || level <= 1) {
-        // If this is the last level, or there are no previous entries, get the entry name
-        return bp_get_entry_name(entry, result_buf, result_len);
-    }
-
-    // Process the ancestor first
-    size_t len = bp_get_function_stack(entry->prev_bprof, level - 1, result_buf, result_len);
-    if (len >= result_len - 1) {
-        result_buf[result_len - 1] = '\0'; // Ensure null termination if buffer is full
-        return len;
-    }
-
-    size_t remaining = result_len - len - 1; // Adjust remaining length to reserve space for null terminator
-
-    // Append delimiter if space is available
-    const char *stack_delimiter = ">>>";
-    size_t delimiter_len = sizeof(">>>") - 1;
-
-    if (remaining > delimiter_len) {
-        strncat(result_buf + len, stack_delimiter, delimiter_len);
-        len += delimiter_len;
-        remaining -= delimiter_len;
-    } else {
-        result_buf[len] = '\0'; // Ensure null termination
-        return len;
-    }
-
-    // Append current function name, considering the reduced remaining space
-    if (remaining > 0) {
-        size_t added_len = bp_get_entry_name(entry, result_buf + len, remaining);
-        len += (added_len > remaining ? remaining : added_len);
-    }
-
-    result_buf[len >= result_len - 1 ? result_len - 1 : len] = '\0'; // Ensure null termination
-    return len >= result_len - 1 ? result_len - 1 : len;
+    return len;
 }
 
 /**
@@ -469,28 +408,6 @@ void bp_inc_count(zval *counts, const char *name, zend_long count)
     zend_string_release(key);
 }
 
-/**
- * Truncates the given timeval to the nearest slot begin, where
- * the slot size is determined by intr
- *
- * @param  tv       Input timeval to be truncated in place
- * @param  intr     Time interval in microsecs - slot width
- * @return void
- */
-void bp_trunc_time(struct timeval *tv, zend_ulong intr)
-{
-    zend_ulong time_in_micro;
-
-    /* Convert to microseconds and truncate that first */
-    time_in_micro = (tv->tv_sec * 1000000) + tv->tv_usec;
-    time_in_micro /= intr;
-    time_in_micro *= intr;
-
-    /* Update tv */
-    tv->tv_sec  = (time_in_micro / 1000000);
-    tv->tv_usec = (time_in_micro % 1000000);
-}
-
 static inline zend_ulong cycle_timer()
 {
 #if defined(__APPLE__) && defined(__MACH__)
@@ -517,31 +434,6 @@ static inline zend_ulong cycle_timer()
     return (s.tv_sec * 1000000) + (s.tv_nsec / 1000);
 #endif
 }
-/**
- * Get the current real CPU clock timer
- */
-static zend_ulong cpu_timer()
-{
-#if defined(CLOCK_PROCESS_CPUTIME_ID)
-    struct timespec s;
-    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &s);
-    return (s.tv_sec * 1000000) + (s.tv_nsec / 1000);
-#else
-    struct rusage ru;
-    getrusage(RUSAGE_SELF, &ru);
-    return ((ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) * 1000000) + (ru.ru_utime.tv_usec + ru.ru_stime.tv_usec);
-#endif
-}
-
-/**
- * Incr time with the given microseconds.
- */
-static void incr_us_interval(struct timeval *start, zend_ulong incr)
-{
-    zend_ulong total_microseconds = (start->tv_sec * 1000000) + start->tv_usec + incr;
-    start->tv_sec  = total_microseconds / 1000000;
-    start->tv_usec = total_microseconds % 1000000;
-}
 
 /**
  * Begins a profiling session for hierarchical mode.
@@ -553,17 +445,6 @@ void bp_mode_hier_begin_fn_cb(bp_entry_t **entries, bp_entry_t *current)
 {
     // Initialize start time for current profile entry
     current->tsc_start = cycle_timer();
-
-    // Record CPU usage if the relevant flag is set
-    if (BPROF_G(bprof_flags) & BPROF_FLAGS_CPU) {
-        current->cpu_start = cpu_timer(); // Record CPU start time
-    }
-
-    // Record memory usage if the relevant flag is set
-    if (BPROF_G(bprof_flags) & BPROF_FLAGS_MEMORY) {
-        current->mu_start_bprof  = zend_memory_usage(0); // Record memory usage
-        current->pmu_start_bprof = zend_memory_peak_usage(0); // Record peak memory usage
-    }
 }
 
 void bp_mode_hier_end_fn_cb(bp_entry_t **entries)
@@ -578,12 +459,10 @@ void bp_mode_hier_end_fn_cb(bp_entry_t **entries)
     double wt, cpu;
 
     // Skip processing for non-tracing entries in PHP 8.0 and above
-#if PHP_VERSION_ID >= 80000
     if (top->is_trace == 0) {
         BPROF_G(func_hash_counters[top->hash_code])--; // Decrement function hash counter
         return; // Early return if not tracing
     }
-#endif
 
     // Calculate elapsed wall time
     wt = cycle_timer() - top->tsc_start;
@@ -603,19 +482,6 @@ void bp_mode_hier_end_fn_cb(bp_entry_t **entries)
     bp_inc_count(counts, "ct", 1);
     bp_inc_count(counts, "wt", (zend_long) wt);
 
-    // Record and update CPU time statistics, if enabled
-    if (BPROF_G(bprof_flags) & BPROF_FLAGS_CPU) {
-        cpu = cpu_timer() - top->cpu_start;
-        bp_inc_count(counts, "cpu", (zend_long) cpu);
-    }
-
-    // Record and update memory usage statistics, if enabled
-    if (BPROF_G(bprof_flags) & BPROF_FLAGS_MEMORY) {
-        zend_ulong mu_end = zend_memory_usage(0);
-        zend_ulong pmu_end = zend_memory_peak_usage(0);
-        bp_inc_count(counts, "mu", (zend_long) (mu_end - top->mu_start_bprof));
-        bp_inc_count(counts, "pmu", (zend_long) (pmu_end - top->pmu_start_bprof));
-    }
 
     // Decrement the function hash counter for the current entry
     BPROF_G(func_hash_counters[top->hash_code])--;
@@ -626,8 +492,6 @@ void bp_mode_hier_end_fn_cb(bp_entry_t **entries)
  * new execute function. We can do whatever profiling we need to
  * before and after calling the actual zend_execute().
  */
-
-#if PHP_VERSION_ID >= 80000
 static void tracer_observer_begin(zend_execute_data *execute_data) {
 #if PHP_VERSION_ID >= 80200
     if (execute_data->func->type == ZEND_INTERNAL_FUNCTION) {
@@ -645,7 +509,6 @@ static void tracer_observer_end(zend_execute_data *execute_data, zval *return_va
             return;
         }
 #endif
-
         end_profiling();
     }
 }
@@ -664,24 +527,7 @@ static zend_observer_fcall_handlers tracer_observer(zend_execute_data *execute_d
     handlers.end = tracer_observer_end;
     return handlers;
 }
-#else
-ZEND_DLEXPORT void bp_execute_ex (zend_execute_data *execute_data)
-{
 
-    if (!BPROF_G(enabled)) {
-        _zend_execute_ex(execute_data);
-        return;
-    }
-
-    begin_profiling(NULL, execute_data);
-
-    _zend_execute_ex(execute_data);
-
-    if (BPROF_G(entries)) {
-        end_profiling();
-    }
-}
-#endif
 
 /**
  * Very similar to bp_execute. Proxy for zend_execute_internal().
@@ -707,79 +553,6 @@ ZEND_DLEXPORT void bp_execute_internal(zend_execute_data *execute_data, zval *re
     if (BPROF_G(entries)) {
         end_profiling();
     }
-}
-
-/**
- * Proxy for zend_compile_file(). Used to profile PHP compilation time.
- */
-ZEND_DLEXPORT zend_op_array* bp_compile_file(zend_file_handle *file_handle, int type)
-{
-    if (!BPROF_G(enabled)) {
-        return _zend_compile_file(file_handle, type);
-    }
-
-    const char *filename;
-    zend_string *function_name;
-    zend_op_array *op_array;
-
-#if PHP_VERSION_ID < 80100
-    filename = bp_get_base_filename(file_handle->filename);
-#else
-    filename = bp_get_base_filename(ZSTR_VAL(file_handle->filename));
-#endif
-
-    function_name = strpprintf(0, "load::%s", filename);
-
-    begin_profiling(function_name, NULL);
-    op_array = _zend_compile_file(file_handle, type);
-
-    if (BPROF_G(entries)) {
-        end_profiling();
-    }
-
-    zend_string_release(function_name);
-
-    return op_array;
-}
-
-/**
- * Proxy for zend_compile_string(). Used to profile PHP eval compilation time.
- */
-#if PHP_VERSION_ID < 80000
-ZEND_DLEXPORT zend_op_array* bp_compile_string(zval *source_string, char *filename)
-#elif PHP_VERSION_ID >= 80200
-ZEND_DLEXPORT zend_op_array* bp_compile_string(zend_string *source_string, const char *filename, zend_compile_position position)
-#else
-ZEND_DLEXPORT zend_op_array* bp_compile_string(zend_string *source_string, const char *filename)
-#endif
-{
-    if (!BPROF_G(enabled)) {
-#if PHP_VERSION_ID >= 80200
-        return _zend_compile_string(source_string, filename, position);
-#else
-        return _zend_compile_string(source_string, filename);
-#endif
-    }
-
-    zend_string *function_name;
-    zend_op_array *op_array;
-
-    function_name = strpprintf(0, "eval::%s", filename);
-
-    begin_profiling(function_name, NULL);
-#if PHP_VERSION_ID >= 80200
-    op_array = _zend_compile_string(source_string, filename, position);
-#else
-    op_array = _zend_compile_string(source_string, filename);
-#endif
-
-    if (BPROF_G(entries)) {
-        end_profiling();
-    }
-
-    zend_string_release(function_name);
-
-    return op_array;
 }
 
 /**
@@ -1006,11 +779,7 @@ zend_string *bp_trace_callback_pdo_statement_execute(zend_string *symbol, zend_e
         pdo_ce = Z_OBJCE_P(object);
 
         // Read the "queryString" property from the PDO object.
-        #if PHP_VERSION_ID < 80000
-        query_string = zend_read_property(pdo_ce, object, "queryString", sizeof("queryString") - 1, 0, NULL);
-        #else
         query_string = zend_read_property(pdo_ce, Z_OBJ_P(object), "queryString", sizeof("queryString") - 1, 0, NULL);
-        #endif
 
         // Check if the query_string property exists and is a string.
         if (query_string != NULL && Z_TYPE_P(query_string) == IS_STRING) {
@@ -1033,11 +802,7 @@ zend_string *bp_trace_callback_curl_exec(zend_string *symbol, zend_execute_data 
     zval func, retval, *option;
     zval *arg = ZEND_CALL_ARG(data, 1);
 
-#if PHP_VERSION_ID < 80000
-    if (arg == NULL || Z_TYPE_P(arg) != IS_RESOURCE) {
-#else
-        if (arg == NULL || Z_TYPE_P(arg) != IS_OBJECT) {
-#endif
+    if (arg == NULL || Z_TYPE_P(arg) != IS_OBJECT) {
         result = strpprintf(0, "%s", ZSTR_VAL(symbol));
         return result;
     }
@@ -1058,9 +823,6 @@ zend_string *bp_trace_callback_curl_exec(zend_string *symbol, zend_execute_data 
             &retval,
             params,
             NULL,
-#if PHP_VERSION_ID < 80000
-            1,
-#endif
             1
     };
 
@@ -1093,8 +855,6 @@ static inline void bp_free_trace_callbacks(zval *val) {
 
 void bp_init_trace_callbacks()
 {
-    bp_trace_callback callback;
-
     if (BPROF_G(trace_callbacks)) {
         return;
     }
@@ -1108,6 +868,8 @@ void bp_init_trace_callbacks()
 
     zend_hash_init(BPROF_G(trace_callbacks), 8, NULL, bp_free_trace_callbacks, 0);
 
+    bp_trace_callback callback;
+
     callback = bp_trace_callback_sql_query;
     register_trace_callback("PDO::exec", callback);
     register_trace_callback("PDO::query", callback);
@@ -1115,9 +877,8 @@ void bp_init_trace_callbacks()
     register_trace_callback("mysqli_query", callback);
     register_trace_callback("mysqli::query", callback);
 
-     callback = bp_trace_callback_predis;
-     register_trace_callback("Predis\\Client::executeCommand", callback);
-    // \Predis\Client::executeCommand(\Predis\Command\CommandInterface $a);
+    callback = bp_trace_callback_predis;
+    register_trace_callback("Predis\\Client::executeCommand", callback);
 
     callback = bp_trace_callback_pdo_statement_execute;
     register_trace_callback("PDOStatement::execute", callback);

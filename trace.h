@@ -116,9 +116,8 @@ static zend_always_inline void begin_profiling(zend_string *root_symbol, zend_ex
     (cur_entry)->hash_code = hash_code % BPROF_FUNC_HASH_COUNTERS_SIZE;
     (cur_entry)->name_bprof = function_name;
     (cur_entry)->prev_bprof = (*(entries));
-#if PHP_VERSION_ID >= 80000
     (cur_entry)->is_trace = 1;
-#endif
+
     /* Call the universal callback */
     bp_mode_common_beginfn((entries), (cur_entry));
     /* Call the mode's beginfn callback */

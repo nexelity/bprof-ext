@@ -14,17 +14,14 @@ extern zend_module_entry bprof_module_entry;
 #include "TSRM.h"
 #endif
 
-#if PHP_VERSION_ID >= 80000
 #include "zend_observer.h"
-#endif
 
 #define BPROF_VERSION "1.4"
 #define BPROF_FUNC_HASH_COUNTERS_SIZE 1024
 #define ROOT_SYMBOL "main()"
-#define SCRATCH_BUF_LEN 4096
+#define SCRATCH_BUF_LEN 512
 
 #define BPROF_FLAGS_NO_BUILTINS 0x0001
-#define BPROF_FLAGS_CPU 0x0002
 #define BPROF_FLAGS_MEMORY 0x0004
 
 #if !defined(uint32)
@@ -51,11 +48,8 @@ typedef struct bp_entry_t {
     long int mu_start_bprof; // memory usage
     long int pmu_start_bprof; // peak memory usage
     zend_ulong tsc_start; // start value for TSC counter
-    zend_ulong cpu_start;
     zend_ulong hash_code; // hash_code for the function name
-#if PHP_VERSION_ID >= 80000
     int is_trace;
-#endif
 } bp_entry_t;
 
 typedef zend_string *(*bp_trace_callback)(zend_string *symbol, zend_execute_data *data);
@@ -83,15 +77,7 @@ ZEND_DLEXPORT void bp_execute_internal(zend_execute_data *execute_data, zval *re
 static zend_op_array * (*_zend_compile_file) (zend_file_handle *file_handle, int type);
 ZEND_DLEXPORT zend_op_array* bp_compile_file(zend_file_handle *file_handle, int type);
 
-#if PHP_VERSION_ID < 80000
-/* Pointer to the original compile string function (used by eval) */
-static zend_op_array * (*_zend_compile_string) (zval *source_string, char *filename);
-ZEND_DLEXPORT zend_op_array* bp_compile_string(zval *source_string, char *filename);
-
-/* Pointer to the original execute function */
-static void (*_zend_execute_ex) (zend_execute_data *execute_data);
-ZEND_DLEXPORT void bp_execute_ex (zend_execute_data *execute_data);
-#elif PHP_VERSION_ID >= 80200
+#if PHP_VERSION_ID >= 80200
 
 /* Pointer to the original compile string function (used by eval) */
 static zend_op_array * (*_zend_compile_string) (zend_string *source_string, const char *filename, zend_compile_position position);
@@ -128,8 +114,6 @@ static inline zend_ulong cycle_timer();
 static void bp_free_the_free_list();
 
 static void bp_fast_free_bprof_entry(bp_entry_t *p);
-
-static void incr_us_interval(struct timeval *start, zend_ulong incr);
 
 void bp_init_trace_callbacks();
 
