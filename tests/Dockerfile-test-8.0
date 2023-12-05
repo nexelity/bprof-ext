@@ -1,0 +1,8 @@
+FROM php:8.0-cli
+COPY --from=composer:latest /usr/bin/composer /usr/local/bin/composer
+RUN apt update && apt install build-essential
+
+ENTRYPOINT []
+WORKDIR /build/
+COPY . /build/
+RUN phpize && ./configure && make && make install && echo "extension=bprof" > /usr/local/etc/php/conf.d/bprof.ini
