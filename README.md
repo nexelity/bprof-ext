@@ -7,7 +7,7 @@ Uncover bottlenecks, memory hogs, and performance insights in your PHP code with
 - 🔍 Detailed function-level insights
 - 📈 Real-time application performance monitoring
 - 📊 Easy-to-visualize data
-- ⚙️ Easy integration with Laravel, Yii, and other PHP frameworks
+- ⚙️ Easy integration with [Laravel](https://github.com/nexelity/bprof-laravel/), Yii, and other PHP frameworks
 - 🚀 Speed up your PHP applications!
 
 ## 🛠 Installation
