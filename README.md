@@ -12,29 +12,16 @@ Uncover bottlenecks, memory hogs, and performance insights in your PHP code with
 
 ## 🛠 Installation
 
-### Linux
+### Linux and MacOS
 
 ```bash
-git clone https://github.com/your-username/bprof.git
-cd bprof
-phpize
-./configure
-make && make install
+curl https://github.com/nexelity/bprof-ext/archive/refs/tags/v1.3.tar.gz --silent --output bprof.tar.gz
+tar -zxvf bprof.tar.gz
+cd nexelity-bprof-ext-*
+phpize && ./configure && make && make install
 ```
 
 Add `extension=bprof.so` to your `php.ini`.
-
-### macOS
-
-```bash
-# To come
-```
-
-### Windows
-
-```powershell
-# To come
-```
 
 ## 🎛 Usage
 
@@ -42,7 +29,11 @@ Add `extension=bprof.so` to your `php.ini`.
 
 ```php
 <?php
-// Code examples to come
+bprof_enable();
+
+// run your app here
+
+$perfData = bprof_disable();
 ```
 
 ## 🤝 Contributing
