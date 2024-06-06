@@ -1,48 +1,24 @@
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
-#include "php.h"
-#include "php_ini.h"
+#include "main/php.h"
 #include "Zend/zend_smart_str.h"
+#include "Zend/zend_API.h"
 #include "ext/standard/info.h"
 #include "php_bprof.h"
-#include "zend_extensions.h"
-#include "trace.h"
-
-#ifndef ZEND_WIN32
-# include <sys/time.h>
-# include <sys/resource.h>
-# include <unistd.h>
-#else
-# include "win32/time.h"
-# include "win32/getrusage.h"
-# include "win32/unistd.h"
-#endif
+#include <sys/resource.h>
 #include <stdlib.h>
 
-#if HAVE_PCRE
-#include "ext/pcre/php_pcre.h"
-#endif
-
 #if __APPLE__
-#include <mach/mach_init.h>
+
 #include <mach/mach_time.h>
+#include <Zend/zend_constants.h>
+#include <Zend/zend_ini.h>
+#include <Zend/zend_observer.h>
+
 #endif
-
-#ifdef ZEND_WIN32
-LARGE_INTEGER performance_frequency;
-#endif
-
-
-# define BPROF_DEBUG false
-
-ZEND_DECLARE_MODULE_GLOBALS(bprof)
 
 /* {{{ arginfo */
 ZEND_BEGIN_ARG_INFO_EX(arginfo_bprof_enable, 0, 0, 0)
-  ZEND_ARG_INFO(0, flags)
-  ZEND_ARG_INFO(0, options)
+                ZEND_ARG_INFO(0, flags)
+                ZEND_ARG_INFO(0, options)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO(arginfo_bprof_disable, 0)
@@ -52,9 +28,9 @@ ZEND_END_ARG_INFO()
 
 /* List of functions implemented/exposed by bprof */
 zend_function_entry bprof_functions[] = {
-  PHP_FE(bprof_enable, arginfo_bprof_enable)
-  PHP_FE(bprof_disable, arginfo_bprof_disable)
-  {NULL, NULL, NULL}
+        PHP_FE(bprof_enable, arginfo_bprof_enable)
+        PHP_FE(bprof_disable, arginfo_bprof_disable)
+        {NULL, NULL, NULL}
 };
 
 /* Callback functions for the bprof extension */
@@ -77,11 +53,7 @@ zend_module_entry bprof_module_entry = {
 
 /* Init module */
 #ifdef COMPILE_DL_BPROF
-    ZEND_GET_MODULE(bprof)
-#endif
-
-#ifdef ZTS
-    ZEND_TSRMLS_CACHE_DEFINE();
+ZEND_GET_MODULE(bprof)
 #endif
 
 /**
@@ -90,8 +62,7 @@ zend_module_entry bprof_module_entry = {
  * @param  long $flags  flags for hierarchical mode
  * @return void
  */
-PHP_FUNCTION(bprof_enable)
-{
+PHP_FUNCTION (bprof_enable) {
     zend_long bprof_flags = 0; // Initialize bprof flags
     zval *optional_array = NULL; // Optional array for future use
 
@@ -109,42 +80,38 @@ PHP_FUNCTION(bprof_enable)
  * profile info.
  *
  * @param  void
- * @return array  hash-array of bprof's profile info
+ * @return array  hash-array of profile info
  */
-PHP_FUNCTION(bprof_disable)
-{
+PHP_FUNCTION (bprof_disable) {
     if (BPROF_G(enabled)) {
         bp_stop();
         RETURN_ZVAL(&BPROF_G(stats_count), 1, 0);
     }
 }
 
-static void php_bprof_init_globals(zend_bprof_globals *bprof_globals)
-{
-    bprof_globals->enabled = 0;
-    bprof_globals->ever_enabled = 0;
-    bprof_globals->bprof_flags = 0;
-    bprof_globals->entries = NULL;
-    bprof_globals->root = NULL;
-    bprof_globals->trace_callbacks = NULL;
+static void php_bprof_init_globals(zend_bprof_globals *globals) {
+    globals->enabled = 0;
+    globals->ever_enabled = 0;
+    globals->bprof_flags = 0;
+    globals->entries = NULL;
+    globals->root = NULL;
+    globals->trace_callbacks = NULL;
 
-    ZVAL_UNDEF(&bprof_globals->stats_count);
+    ZVAL_UNDEF(&globals->stats_count);
 
     /* no free bp_entry_t structures to start with */
-    bprof_globals->entry_free_list = NULL;
+    globals->entry_free_list = NULL;
 
-    int i;
-    for (i = 0; i < BPROF_FUNC_HASH_COUNTERS_SIZE; i++) {
-        bprof_globals->func_hash_counters[i] = 0;
+    for (int i = 0; i < BPROF_FUNC_HASH_COUNTERS_SIZE; i++) {
+        globals->func_hash_counters[i] = 0;
     }
 }
 
 /**
  * Module init callback.
  */
-PHP_MINIT_FUNCTION(bprof)
-{
-    ZEND_INIT_MODULE_GLOBALS(bprof, php_bprof_init_globals, NULL);
+PHP_MINIT_FUNCTION (bprof) {
+    ZEND_INIT_MODULE_GLOBALS(bprof, php_bprof_init_globals, NULL)
 
     bp_register_constants(INIT_FUNC_ARGS_PASSTHRU);
 
@@ -154,22 +121,13 @@ PHP_MINIT_FUNCTION(bprof)
     _zend_execute_internal = zend_execute_internal;
     zend_execute_internal = bp_execute_internal;
 
-#if defined(DEBUG)
-    /* To make it random number generator repeatable to ease testing. */
-    srand(0);
-#endif
-
-#ifdef ZEND_WIN32
-    QueryPerformanceFrequency(&performance_frequency);
-#endif
     return SUCCESS;
 }
 
 /**
  * Module shutdown callback.
  */
-PHP_MSHUTDOWN_FUNCTION(bprof)
-{
+PHP_MSHUTDOWN_FUNCTION (bprof) {
     /* free any remaining items in the free list */
     bp_free_the_free_list();
     zend_execute_internal = _zend_execute_internal;
@@ -180,22 +138,15 @@ PHP_MSHUTDOWN_FUNCTION(bprof)
 /**
  * Request init callback. Nothing to do yet!
  */
-PHP_RINIT_FUNCTION(bprof)
-{
-#if defined(ZTS) && defined(COMPILE_DL_BPROF)
-    ZEND_TSRMLS_CACHE_UPDATE();
-#endif
-
+PHP_RINIT_FUNCTION (bprof) {
     BPROF_G(timebase_conversion) = get_timebase_conversion();
-
     return SUCCESS;
 }
 
 /**
  * Request shutdown callback. Stop profiling and return.
  */
-PHP_RSHUTDOWN_FUNCTION(bprof)
-{
+PHP_RSHUTDOWN_FUNCTION (bprof) {
     bp_end();
     return SUCCESS;
 }
@@ -203,8 +154,7 @@ PHP_RSHUTDOWN_FUNCTION(bprof)
 /**
  * Module info callback. Returns the bprof version.
  */
-PHP_MINFO_FUNCTION(bprof)
-{
+PHP_MINFO_FUNCTION (bprof) {
     php_info_print_table_start();
     php_info_print_table_row(2, "Author", "Ben Poulson <ben.poulson@nexelity.com>");
     php_info_print_table_row(2, "Version", BPROF_VERSION);
@@ -213,29 +163,26 @@ PHP_MINFO_FUNCTION(bprof)
     DISPLAY_INI_ENTRIES();
 }
 
-static void bp_register_constants(INIT_FUNC_ARGS)
-{
+static void bp_register_constants(INIT_FUNC_ARGS) {
     REGISTER_LONG_CONSTANT("BPROF_FLAGS_NO_BUILTINS", BPROF_FLAGS_NO_BUILTINS, CONST_CS | CONST_PERSISTENT);
 }
 
-double get_timebase_conversion()
-{
+double get_timebase_conversion() {
 #if defined(__APPLE__)
     mach_timebase_info_data_t info;
     (void) mach_timebase_info(&info);
 
     return info.denom * 1000. / info.numer;
-#endif
-
+#else
     return 1.0;
+#endif
 }
 
 /**
  * Initialize profiler state
  *
  */
-void bp_init_profiler_state()
-{
+void bp_init_profiler_state() {
     /* Setup globals */
     if (!BPROF_G(ever_enabled)) {
         BPROF_G(ever_enabled) = 1;
@@ -256,8 +203,7 @@ void bp_init_profiler_state()
  * Cleanup profiler state
  *
  */
-void bp_clean_profiler_state()
-{
+void bp_clean_profiler_state() {
     /* Clear globals */
     if (Z_TYPE(BPROF_G(stats_count)) != IS_UNDEF) {
         zval_ptr_dtor(&BPROF_G(stats_count));
@@ -290,12 +236,12 @@ size_t bp_get_entry_name(bp_entry_t *entry, char *result_buf, size_t result_len)
               ? snprintf(result_buf, result_len, "%s@%d", entry->name_bprof->val, entry->rlvl_bprof)
               : snprintf(result_buf, result_len, "%s", entry->name_bprof->val);
 
-    if (len < 0 || (size_t)len >= result_len) {
+    if (len < 0 || (size_t) len >= result_len) {
         result_buf[result_len - 1] = '\0'; // Ensure null termination
         return result_len - 1;
     }
 
-    return (size_t)len;
+    return (size_t) len;
 }
 
 size_t bp_get_function_stack(bp_entry_t *entry, int level, char *result_buf, size_t result_len) {
@@ -331,38 +277,9 @@ size_t bp_get_function_stack(bp_entry_t *entry, int level, char *result_buf, siz
 }
 
 /**
- * Takes an input of the form /a/b/c/d/foo.php and returns
- * a pointer to one-level directory and basefile name
- * (d/foo.php) in the same string.
- */
-static const char *bp_get_base_filename(const char *filename)
-{
-    const char *ptr;
-    int found = 0;
-
-    if (!filename)
-        return "";
-
-    /* reverse search for "/" and return a ptr to the next char */
-    for (ptr = filename + strlen(filename) - 1; ptr >= filename; ptr--) {
-        if (*ptr == '/') {
-            found++;
-        }
-
-        if (found == 2) {
-            return ptr + 1;
-        }
-    }
-
-    /* no "/" char found, so return the whole string */
-    return filename;
-}
-
-/**
  * Free any items in the free list.
  */
-static void bp_free_the_free_list()
-{
+static void bp_free_the_free_list() {
     bp_entry_t *p = BPROF_G(entry_free_list);
     bp_entry_t *cur;
 
@@ -382,8 +299,7 @@ static void bp_free_the_free_list()
  * @param  long  count    Value of the stat to incr by
  * @return void
  */
-void bp_inc_count(zval *counts, const char *name, zend_long count)
-{
+void bp_inc_count(zval *counts, const char *name, zend_long count) {
     if (!counts) {
         return;
     }
@@ -408,23 +324,10 @@ void bp_inc_count(zval *counts, const char *name, zend_long count)
     zend_string_release(key);
 }
 
-static inline zend_ulong cycle_timer()
-{
+static inline zend_ulong cycle_timer() {
 #if defined(__APPLE__) && defined(__MACH__)
     // On macOS, use the Mach absolute time, accounting for a predefined timebase conversion.
     return mach_absolute_time() / BPROF_G(timebase_conversion);
-
-#elif defined(ZEND_WIN32)
-    // On Windows, use the QueryPerformanceCounter API.
-    LARGE_INTEGER lt;
-    QueryPerformanceCounter(&lt);
-
-    // Convert the counter value to microseconds.
-    lt.QuadPart *= 1000000;
-    lt.QuadPart /= performance_frequency.QuadPart;
-
-    return lt.QuadPart;
-
 #else
     // For other platforms, use the POSIX clock_gettime with the monotonic clock.
     struct timespec s;
@@ -441,14 +344,12 @@ static inline zend_ulong cycle_timer()
  * @param bp_entry_t **entries The list of profiling entries.
  * @param bp_entry_t *current The current profiling entry.
  */
-void bp_mode_hier_begin_fn_cb(bp_entry_t **entries, bp_entry_t *current)
-{
+void bp_begin_function_callback(bp_entry_t **entries, bp_entry_t *current) {
     // Initialize start time for current profile entry
     current->tsc_start = cycle_timer();
 }
 
-void bp_mode_hier_end_fn_cb(bp_entry_t **entries)
-{
+void bp_end_function_callback(bp_entry_t **entries) {
     // Retrieve the top entry in the profiling stack
     bp_entry_t *top = (*entries);
 
@@ -456,7 +357,7 @@ void bp_mode_hier_end_fn_cb(bp_entry_t **entries)
     char symbol[SCRATCH_BUF_LEN];
 
     // Variables for wall time and CPU time
-    double wt, cpu;
+    zend_ulong wt;
 
     // Skip processing for non-tracing entries in PHP 8.0 and above
     if (top->is_trace == 0) {
@@ -533,8 +434,7 @@ static zend_observer_fcall_handlers tracer_observer(zend_execute_data *execute_d
  * Very similar to bp_execute. Proxy for zend_execute_internal().
  * Applies to zend builtin functions.
  */
-ZEND_DLEXPORT void bp_execute_internal(zend_execute_data *execute_data, zval *return_value)
-{
+void bp_execute_internal(zend_execute_data *execute_data, zval *return_value) {
     if (!BPROF_G(enabled) || (BPROF_G(bprof_flags) & BPROF_FLAGS_NO_BUILTINS) > 0) {
         execute_internal(execute_data, return_value);
         return;
@@ -543,7 +443,7 @@ ZEND_DLEXPORT void bp_execute_internal(zend_execute_data *execute_data, zval *re
     begin_profiling(NULL, execute_data);
 
     if (!_zend_execute_internal) {
-        /* no old override to begin with. so invoke the builtin's implementation  */
+        /* no old override to begin with. so invoke the builtin implementation  */
         execute_internal(execute_data, return_value);
     } else {
         /* call the old override */
@@ -560,8 +460,7 @@ ZEND_DLEXPORT void bp_execute_internal(zend_execute_data *execute_data, zval *re
  * It replaces all the functions like zend_execute, zend_execute_internal,
  * etc that needs to be instrumented with their corresponding proxies.
  */
-static void bp_begin(zend_long bprof_flags)
-{
+static void bp_begin(zend_long bprof_flags) {
     // Check if bprof is already enabled and throw an exception if it is
     if (BPROF_G(enabled)) {
         php_error(E_WARNING, "bprof_begin already active");
@@ -569,11 +468,11 @@ static void bp_begin(zend_long bprof_flags)
     }
 
     BPROF_G(enabled) = 1; // Enable bprof
-    BPROF_G(bprof_flags) = (uint32)bprof_flags; // Set profiling flags
+    BPROF_G(bprof_flags) = bprof_flags; // Set profiling flags
 
     // Register callback functions for profiling mode
-    BPROF_G(mode_cb).begin_fn_cb = bp_mode_hier_begin_fn_cb;
-    BPROF_G(mode_cb).end_fn_cb = bp_mode_hier_end_fn_cb;
+    BPROF_G(mode_cb).begin_fn_cb = bp_begin_function_callback;
+    BPROF_G(mode_cb).end_fn_cb = bp_end_function_callback;
 
     // Perform one-time initializations of the profiler state
     bp_init_profiler_state();
@@ -588,8 +487,7 @@ static void bp_begin(zend_long bprof_flags)
 /**
  * Called at request shutdown time. Cleans the profiler's global state.
  */
-static void bp_end()
-{
+static void bp_end() {
     /* Bail if not ever enabled */
     if (!BPROF_G(ever_enabled)) {
         return;
@@ -607,8 +505,7 @@ static void bp_end()
 /**
  * Called from bprof_disable(). Removes all the proxies setup by bp_begin() and restores the original values.
  */
-static void bp_stop()
-{
+static void bp_stop() {
     /* End any unfinished calls */
     while (BPROF_G(entries)) {
         end_profiling();
@@ -623,8 +520,7 @@ static void bp_stop()
     }
 }
 
-zend_string *bp_trace_callback_sql_query(zend_string *function_name, zend_execute_data *data)
-{
+zend_string *bp_trace_callback_sql_query(zend_string *function_name, zend_execute_data *data) {
     zend_string *trace_name;
 
     // Check if the function name is "mysqli_query".
@@ -645,18 +541,12 @@ zend_string *bp_trace_callback_sql_query(zend_string *function_name, zend_execut
     return trace_name;  // Return the generated trace name.
 }
 
-zend_string* concat_from_hash(zval *array, const char *join_str) {
+zend_string *concat_from_hash(zval *array, const char *join_str) {
     if (!array) {
-#if BPROF_DEBUG == true
-        php_error(E_WARNING, "concat_from_hash: Input array is NULL");
-#endif
         return zend_string_init("error", strlen("error"), 0);
     }
 
     if (Z_TYPE_P(array) != IS_ARRAY) {
-#if BPROF_DEBUG == true
-        php_error(E_WARNING, "concat_from_hash: Input is not an array");
-#endif
         return zend_string_init("error", strlen("error"), 0);
     }
 
@@ -665,28 +555,23 @@ zend_string* concat_from_hash(zval *array, const char *join_str) {
     zval *entry;
     int isFirst = 1;
 
-    ZEND_HASH_FOREACH_VAL(ht, entry) {
-        if (!entry) {
-#if BPROF_DEBUG == true
-                php_error(E_WARNING, "concat_from_hash: Encountered NULL entry in hash");
-#endif
-            continue;
-        }
+    ZEND_HASH_FOREACH_VAL(ht, entry)
+            {
+                if (!entry) {
+                    continue;
+                }
 
-        if (Z_TYPE_P(entry) == IS_STRING) {
-            if (!isFirst) {
-                smart_str_appends(&result, join_str);
-            } else {
-                isFirst = 0;
-            }
-            smart_str_appends(&result, Z_STRVAL_P(entry));
-        }
-    } ZEND_HASH_FOREACH_END();
+                if (Z_TYPE_P(entry) == IS_STRING) {
+                    if (!isFirst) {
+                        smart_str_appends(&result, join_str);
+                    } else {
+                        isFirst = 0;
+                    }
+                    smart_str_appends(&result, Z_STRVAL_P(entry));
+                }
+            }ZEND_HASH_FOREACH_END();
 
     if (!result.s) {
-#if BPROF_DEBUG == true
-            php_error(E_WARNING, "concat_from_hash: Resulting smart_str is NULL");
-#endif
         return zend_string_init("error", strlen("error"), 0);
     }
 
@@ -702,28 +587,22 @@ zend_string *bp_trace_callback_predis(zend_string *symbol, zend_execute_data *da
 
     // Debug: Check if arg is NULL
     if (!arg) {
-#if BPROF_DEBUG == true
-            php_error(E_WARNING, "bp_trace_callback_predis: arg is NULL");
-#endif
         return strpprintf(0, "%s#%s", ZSTR_VAL(symbol), "arg_is_null");
     }
 
     // Initialize and call 'getId' method
     ZVAL_STRING(&funcId, "getId");
     zend_fcall_info fciId = {
-        sizeof(fciId),
-        funcId,
-        &retvalcommand,
-        NULL,
-        Z_OBJ_P(arg),
-        0,
-        NULL
+            sizeof(fciId),
+            funcId,
+            &retvalcommand,
+            NULL,
+            Z_OBJ_P(arg),
+            0,
+            NULL
     };
     if (zend_call_function(&fciId, NULL) == FAILURE) {
         zval_dtor(&funcId);
-#if BPROF_DEBUG == true
-            php_error(E_WARNING, "bp_trace_callback_predis: zend_call_function for getId failed");
-#endif
         return strpprintf(0, "%s#%s", ZSTR_VAL(symbol), "unknown");
     }
     zval_dtor(&funcId);
@@ -731,34 +610,28 @@ zend_string *bp_trace_callback_predis(zend_string *symbol, zend_execute_data *da
     // Initialize and call 'getArguments' method
     ZVAL_STRING(&funcArgs, "getArguments");
     zend_fcall_info fciArgs = {
-        sizeof(fciArgs),
-        funcArgs,
-        &retvalargs,
-        NULL,
-        Z_OBJ_P(arg),
-        0,
-        NULL
+            sizeof(fciArgs),
+            funcArgs,
+            &retvalargs,
+            NULL,
+            Z_OBJ_P(arg),
+            0,
+            NULL
     };
     if (zend_call_function(&fciArgs, NULL) == FAILURE) {
         zval_dtor(&funcArgs);
-#if BPROF_DEBUG == true
-            php_error(E_WARNING, "bp_trace_callback_predis: zend_call_function for getArguments failed");
-#endif
         return strpprintf(0, "%s#%s", ZSTR_VAL(symbol), "unknown");
     }
     zval_dtor(&funcArgs);
 
     // Debug: Check if retvalargs is a valid hash
     if (Z_TYPE_P(&retvalargs) != IS_ARRAY) {
-#if BPROF_DEBUG == true
-            php_error(E_WARNING, "bp_trace_callback_predis: retvalargs is not an array");
-#endif
         return strpprintf(0, "%s#%s", ZSTR_VAL(symbol), "invalid_args");
     }
 
     // Concatenate results
-   zend_string *argsConcatenated = concat_from_hash(&retvalargs, "\n");
-   result = strpprintf(0, "%s#%s %s", ZSTR_VAL(symbol), Z_STRVAL(retvalcommand), ZSTR_VAL(argsConcatenated));
+    zend_string *argsConcatenated = concat_from_hash(&retvalargs, "\n");
+    result = strpprintf(0, "%s#%s %s", ZSTR_VAL(symbol), Z_STRVAL(retvalcommand), ZSTR_VAL(argsConcatenated));
 
 
     // Release the temporary zend_string from concat_from_hash
@@ -767,8 +640,7 @@ zend_string *bp_trace_callback_predis(zend_string *symbol, zend_execute_data *da
     return result;
 }
 
-zend_string *bp_trace_callback_pdo_statement_execute(zend_string *symbol, zend_execute_data *data)
-{
+zend_string *bp_trace_callback_pdo_statement_execute(zend_string *symbol, zend_execute_data *data) {
     zend_string *result = NULL;
     zend_class_entry *pdo_ce;
     zval *query_string = NULL;
@@ -795,9 +667,7 @@ zend_string *bp_trace_callback_pdo_statement_execute(zend_string *symbol, zend_e
 }
 
 
-
-zend_string *bp_trace_callback_curl_exec(zend_string *symbol, zend_execute_data *data)
-{
+zend_string *bp_trace_callback_curl_exec(zend_string *symbol, zend_execute_data *data) {
     zend_string *result;
     zval func, retval, *option;
     zval *arg = ZEND_CALL_ARG(data, 1);
@@ -840,8 +710,7 @@ zend_string *bp_trace_callback_curl_exec(zend_string *symbol, zend_execute_data 
     return result;
 }
 
-zend_string *bp_trace_callback_exec(zend_string *function_name, zend_execute_data *data)
-{
+zend_string *bp_trace_callback_exec(zend_string *function_name, zend_execute_data *data) {
     zend_string *trace_name;
     zval *arg = ZEND_CALL_ARG(data, 1);
     trace_name = strpprintf(0, "%s#%s", ZSTR_VAL(function_name), Z_STRVAL_P(arg));
@@ -853,8 +722,7 @@ static inline void bp_free_trace_callbacks(zval *val) {
 }
 
 
-void bp_init_trace_callbacks()
-{
+void bp_init_trace_callbacks() {
     if (BPROF_G(trace_callbacks)) {
         return;
     }
@@ -871,33 +739,148 @@ void bp_init_trace_callbacks()
     bp_trace_callback callback;
 
     callback = bp_trace_callback_sql_query;
-    register_trace_callback("PDO::exec", callback);
-    register_trace_callback("PDO::query", callback);
-    register_trace_callback("mysql_query", callback);
-    register_trace_callback("mysqli_query", callback);
-    register_trace_callback("mysqli::query", callback);
+    register_trace_callback("PDO::exec", callback)
+    register_trace_callback("PDO::query", callback)
+    register_trace_callback("mysql_query", callback)
+    register_trace_callback("mysqli_query", callback)
+    register_trace_callback("mysqli::query", callback)
 
     callback = bp_trace_callback_predis;
-    register_trace_callback("Predis\\Client::executeCommand", callback);
+    register_trace_callback("Predis\\Client::executeCommand", callback)
 
     callback = bp_trace_callback_pdo_statement_execute;
-    register_trace_callback("PDOStatement::execute", callback);
+    register_trace_callback("PDOStatement::execute", callback)
 
     callback = bp_trace_callback_curl_exec;
-    register_trace_callback("curl_exec", callback);
+    register_trace_callback("curl_exec", callback)
 
     callback = bp_trace_callback_exec;
-    register_trace_callback("exec", callback);
-    register_trace_callback("system", callback);
-    register_trace_callback("popen", callback);
-    register_trace_callback("pcntl_exec", callback);
-    register_trace_callback("shell_exec", callback);
-    register_trace_callback("proc_open", callback);
-    register_trace_callback("eval", callback);
-    register_trace_callback("passthru", callback);
-    register_trace_callback("fopen", callback);
-    register_trace_callback("file_get_contents", callback);
-    register_trace_callback("file_put_contents", callback);
-    register_trace_callback("fopen", callback);
-    register_trace_callback("preg_match", callback);
+    register_trace_callback("exec", callback)
+    register_trace_callback("system", callback)
+    register_trace_callback("popen", callback)
+    register_trace_callback("pcntl_exec", callback)
+    register_trace_callback("shell_exec", callback)
+    register_trace_callback("proc_open", callback)
+    register_trace_callback("eval", callback)
+    register_trace_callback("passthru", callback)
+    register_trace_callback("fopen", callback)
+    register_trace_callback("file_get_contents", callback)
+    register_trace_callback("file_put_contents", callback)
+    register_trace_callback("fopen", callback)
+    register_trace_callback("preg_match", callback)
+}
+
+static zend_always_inline void bp_mode_common_begin_function(bp_entry_t **entries, bp_entry_t *current) {
+    bp_entry_t *p;
+
+    /* This symbol's recursive level */
+    int recurse_level = 0;
+
+    if (BPROF_G(func_hash_counters[current->hash_code]) > 0) {
+        /* Find this symbols recurse level */
+        for (p = (*entries); p; p = p->prev_bprof) {
+            if (zend_string_equals(current->name_bprof, p->name_bprof)) {
+                recurse_level = (p->rlvl_bprof) + 1;
+                break;
+            }
+        }
+    }
+
+    BPROF_G(func_hash_counters[current->hash_code])++;
+
+    /* Init current function's recurse level */
+    current->rlvl_bprof = recurse_level;
+}
+
+static zend_always_inline zend_string *bp_get_function_name(zend_execute_data *execute_data) {
+    zend_function *curr_func;
+    zend_string *real_function_name;
+
+    if (!execute_data) {
+        return NULL;
+    }
+
+    curr_func = execute_data->func;
+
+    if (!curr_func->common.function_name) {
+        return NULL;
+    }
+
+    if (curr_func->common.scope != NULL) {
+        real_function_name = strpprintf(0, "%s::%s", curr_func->common.scope->name->val,
+                                        ZSTR_VAL(curr_func->common.function_name));
+    } else {
+        real_function_name = zend_string_copy(curr_func->common.function_name);
+    }
+
+    return real_function_name;
+}
+
+static zend_always_inline bp_entry_t *bp_fast_alloc_bprof_entry() {
+    bp_entry_t *p;
+
+    p = BPROF_G(entry_free_list);
+
+    if (p) {
+        BPROF_G(entry_free_list) = p->prev_bprof;
+        return p;
+    } else {
+        return (bp_entry_t *) malloc(sizeof(bp_entry_t));
+    }
+}
+
+static zend_always_inline void bp_fast_free_bprof_entry(bp_entry_t *p) {
+    if (p->name_bprof != NULL) {
+        zend_string_release(p->name_bprof);
+    }
+
+    /* we use/overload the prev_bprof field in the structure to link entries in
+     * the free list.
+     * */
+    p->prev_bprof = BPROF_G(entry_free_list);
+    BPROF_G(entry_free_list) = p;
+}
+
+static zend_always_inline void begin_profiling(zend_string *root_symbol, zend_execute_data *execute_data) {
+    zend_string *function_name;
+    bp_entry_t **entries = &BPROF_G(entries);
+
+    if (root_symbol == NULL) {
+        function_name = bp_get_function_name(execute_data);
+    } else {
+        function_name = zend_string_copy(root_symbol);
+    }
+
+    if (function_name == NULL) {
+        return;
+    }
+
+    zend_ulong hash_code = ZSTR_HASH(function_name);
+    bp_entry_t *cur_entry = bp_fast_alloc_bprof_entry();
+    (cur_entry)->hash_code = hash_code % BPROF_FUNC_HASH_COUNTERS_SIZE;
+    (cur_entry)->name_bprof = function_name;
+    (cur_entry)->prev_bprof = (*(entries));
+    (cur_entry)->is_trace = 1;
+
+    /* Call the universal callback */
+    bp_mode_common_begin_function((entries), (cur_entry));
+    /* Call the mode's beginfn callback */
+    BPROF_G(mode_cb).begin_fn_cb((entries), (cur_entry));
+    /* Update entries linked list */
+    (*(entries)) = (cur_entry);
+}
+
+static zend_always_inline void end_profiling() {
+    bp_entry_t *cur_entry;
+    bp_entry_t **entries = &BPROF_G(entries);
+
+    /* Call the mode's endfn callback. */
+    /* NOTE(cjiang): we want to call this 'end_fn_cb' before */
+    /* 'hp_mode_common_endfn' to avoid including the time in */
+    /* 'hp_mode_common_endfn' in the profiling results.      */
+    BPROF_G(mode_cb).end_fn_cb(entries);
+    cur_entry = (*(entries));
+    /* Free top entry and update entries linked list */
+    (*(entries)) = (*(entries))->prev_bprof;
+    bp_fast_free_bprof_entry(cur_entry);
 }
